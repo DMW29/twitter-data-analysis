@@ -1,0 +1,242 @@
+---
+title: "Entity Extraction"
+author: "Dianne Waterson"
+date: "September 23, 2016"
+output:
+  html_document:
+    theme: default
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.keep = "all")
+knitr::opts_chunk$set(fig.path = "./figure/plot")
+```
+
+Set working directory
+```{r working directory}
+setwd("~/Twitter Project/Entity Extraction")
+```
+
+Check for required packages and install if need be.
+```{r packages, eval=TRUE, messages=FALSE, warning=FALSE}
+packages<-function(x){
+     x<-as.character(match.call()[[2]])
+     if (!require(x,character.only=TRUE)){
+          install.packages(pkgs=x,repos="http://cran.r-project.org", dependencies = TRUE)
+          require(x,character.only=TRUE)
+     }
+}
+packages(tidyjson)
+packages(dplyr)
+packages(NLP)
+packages(openNLP)
+packages(magritter)
+```
+
+The tidyjson package takes an alternate approach to structuring JSON data 
+into tidy data.frames. Similar to tidyr, tidyjson builds a grammar for 
+manipulating JSON into a tidy table structure. Tidyjson is based on the 
+following principles:
+
+* Leverage other libraries for efficiently parsing JSON (jsonlite)
+* Integrate with pipelines built on dplyr and the magrittr %>% operator
+* Turn arbitrarily complex and nested JSON into tidy data.frames that can be joined later
+* Guarantee a deterministic data.frame column structure
+* Naturally handle 'ragged' arrays and / or objects (varying lengths by document)
+* Allow for extraction of data in values or key names
+* Ensure edge cases are handled correctly (especially empty data)
+
+     
+The first step in using tidyjson is to convert your JSON into a tbl_json 
+object. Almost every function in tidyjson accepts either a tbl_jsonobject or
+a character vector of JSON data as it's first parameter, and returns a 
+tbl_json object for downstream use. To facilitate integration with dplyr,
+tbl_json inherits from dplyr::tbl. The easiest way to construct a tbl_json
+object is directly from a character string.
+```{r json}
+filename <- "WNIT3rdRnd_WomensNIT_UNCvUCLA_12.out"
+fname <- "WomensNIT noBOM.txt"
+data <- read_json(fname, format = "jsonl")
+class(data)
+```
+
+Similar to gather_array(), gather_keys() takes JSON objects and duplicates 
+the rows in the data.frame to correspond to the keys of the object, and puts
+the values of the object into the JSON attribute.
+```{r keys}
+library(magrittr)
+data1 <- gather_keys(data)
+```
+
+Identify JSON structure with json_types(). One of the first steps you will 
+want to take is to investigate the structure of your JSON data. The function
+json_types() inspects the JSON associated with each row of the data.frame, 
+and adds a new column (type by default) that identifies the type according
+to the JSON standard. 
+```{r types}
+data2 <- json_types(data1)
+```
+
+The append_values_X() functions let you take the remaining JSON and add it 
+as a column X (for X in "string", "number", "logical") insofar as it is of
+the JSON type specified.
+```{r append_values_string}
+data3 <- append_values_string(data2)
+```
+
+When investigating JSON data it can be helpful to identify the lengths of 
+the JSON objects or arrays, especialy when they are 'ragged' across
+documents.
+```{r lengths}
+data4 <- json_lengths(data3)
+```
+
+Adding new columns to your data.frame is accomplished with spread_values(),
+which lets you dive into (potentially nested) JSON objects and extract 
+specific values. spread_values() takes jstring(), jnumber() or jlogical() 
+function calls as arguments in order to specify the type of the data that 
+should be captured at each desired key location. We are simply going to 
+capture the tweets.
+```{r get_tweets}
+twts <- data %>%
+     spread_values(
+          txt <- jstring("text")
+     ) %>%
+tbl_df
+```
+
+You can see that there are 255 lines in the file, each contained in a 
+character vector. We can combine all of these character vectors into a 
+single character vector using the paste() function, adding a space between
+each of them.
+```{r string}
+twt <- paste(twts[2], collapse = " ")
+twt
+```
+
+For many kinds of text processing it is sufficient, even preferable to use 
+base R classes. But for NLP we are obligated to use the String class. 
+```{r string_class}
+library(NLP)
+library(openNLP)
+twtg <- as.String(twt)
+```
+
+Next we need to create annotators for words and sentences. Annotators are
+created by functions which load the underlying Java libraries. These 
+functions then mark the places in the string where words and sentences start
+and end. The annotation functions are themselves created by functions.
+```{r create_annotator}
+word_ann <- Maxent_Word_Token_Annotator()
+sent_ann <- Maxent_Sent_Token_Annotator()
+```
+
+These annotators form a "pipeline" for annotating the text in our twtg 
+variable. First we have to determine where the sentences are, then we can
+determine where the words are. We can apply these annotator functions to our
+data using the annotate() function.
+```{r sentence & word}
+bio_annotations <- annotate(twtg, list(sent_ann, word_ann))
+```
+
+The result is a annotation object. Looking at first few items contained in 
+the object, we can see the kind of information contained in the annotations 
+object.
+```{r annotation_object}
+class(bio_annotations)
+head(bio_annotations)
+```
+
+We see that the annotation object contains a list of sentences (and also 
+words) identified by position. That is, the first sentence in the document 
+begins at character 1 and ends at character 282. The sentences also contain
+information about the positions of the words that comprise them. We can 
+combine the tweets and the annotations to create what the NLP package calls
+an AnnotatedPlainTextDocument. If we wished we could also associate metadata
+with the object using the meta = argument.
+```{r APTD}
+bio_doc <- AnnotatedPlainTextDocument(twtg, bio_annotations)
+```
+     
+Now we can extract information from our document using accessor functions
+like sents() to get the sentences and words() to get the words. We could get just the plain text with as.character(bio_doc).
+```{r peek}
+sents(bio_doc) %>% head(2)
+words(bio_doc) %>% head(10)
+```
+     
+Among the several kinds of annotators provided by the openNLP package is an
+entity annotator. An entity is basically a proper noun, such as a person or
+place name. Using a technique called named entity recognition (NER), we can
+extract various kinds of names from a document. In English, OpenNLP can find
+dates, locations, money, organizations, percentages, people, and times. 
+(Acceptable values are "date", "location", "money", "organization", 
+"percentage", "person", "misc".) We will use it to find people, places, and
+organizations since all three are mentioned in our sample paragraph. These
+kinds of annotator functions are created using the same kinds of constructor
+functions that we used for word_ann() and sent_ann().
+```{r NER}
+person_ann <- Maxent_Entity_Annotator(kind = "person")
+location_ann <- Maxent_Entity_Annotator(kind = "location")
+organization_ann <- Maxent_Entity_Annotator(kind = "organization")
+date_ann <- Maxent_Entity_Annotator(kind = "date")
+money_ann <- Maxent_Entity_Annotator(kind = "money")
+percentage_ann <- Maxent_Entity_Annotator(kind = "percentage")
+```
+     
+Recall that we earlier passed a list of annotator functions to the
+annotate() function to indicate which kinds of annotations we wanted to
+make. We will create a new pipeline list to hold our annotators in the order
+we want to apply them, then apply it to the twtg variable. Then, as before, 
+we can create an AnnotatedPlainTextDocument.
+```{r APTD2}
+pipeline <- list(sent_ann,
+                 word_ann,
+                 person_ann,
+                 location_ann,
+                 organization_ann,
+                 date_ann,
+                 money_ann,
+                 percentage_ann)
+bio_annotations <- annotate(twtg, pipeline)
+bio_doc <- AnnotatedPlainTextDocument(twtg, bio_annotations)
+```
+     
+As before we could extract words and sentences using the getter methods
+words() and sents(). Unfortunately there is no comparably easy way to
+extract names entities from documents. But the function below will do the 
+trick.
+     
+Extract entities from an AnnotatedPlainTextDocument
+```{r extract_entity_function}
+entities <- function(doc, kind) {
+     s <- doc$content
+     a <- annotations(doc)[[1]]
+     if(hasArg(kind)) {
+          k <- sapply(a$features, `[[`, "kind")
+          s[a[k == kind]]
+     } else {
+          s[a[a$type == "entity"]]
+     }
+}
+```
+     
+Now we can extract all of the named entities using entities(bio_doc), and 
+specific kinds of entities using the kind = argument. Let's get all the 
+people, places, organizations, dates, money, and percentages.
+```{r entity_extraction}
+entities(bio_doc, kind = "person")
+entities(bio_doc, kind = "location")
+entities(bio_doc, kind = "organization")
+entities(bio_doc, kind = "date")
+entities(bio_doc, kind = "money")
+entities(bio_doc, kind = "percentage")
+```
+
+Reference: https://cran.r-project.org/web/packages/tidyjson/vignettes/introduction-to-tidyjson.html
+Reference: https://rpubs.com/lmullen/nlp-chapter     
+     
+     
+     
