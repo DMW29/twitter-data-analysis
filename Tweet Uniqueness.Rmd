@@ -20,7 +20,7 @@ The expectation of Twitter Tweets within a dataset may be that a retweet is not 
 
 ## Housekeeping
 
-Retweets are identified in the dataset by the presence of child 'retweet status' or 'is quote status' nodes. Tweets are uniquely identified using the text attribute that contains the tweet. The documentation describing tweet attributes is referenced here --> https://dev.twitter.com/overview/api/tweets. The presence of the 'retweet status' attribute in conjunction with the 'is quote status' attribute set to FALSE defines an original tweet. Unique tweets are tweets whose specific text is not duplicated within the dataset. 
+Retweets are identified in the dataset by the presence of child 'retweet status' or 'is quote status' nodes. Tweets are uniquely identified using the text attribute that contains the tweet. The documentation describing tweet attributes is referenced here --> https://dev.twitter.com/overview/api/tweets. The non-presence of the 'retweet status' attribute in conjunction with the 'is quote status' attribute set to FALSE defines an original tweet. Unique tweets are tweets whose specific text is not duplicated within the dataset. 
 
 ## Analysis
 
